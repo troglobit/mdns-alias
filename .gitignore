@@ -3,6 +3,8 @@
 .deps
 .libs
 
+mdns-alias
+
 /aclocal.m4
 /autom4te.cache/
 /aux
