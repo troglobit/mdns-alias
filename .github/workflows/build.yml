@@ -25,6 +25,7 @@ jobs:
     steps:
       - name: Install deps ...
         run: |
+          sudo apt-get -y update
           sudo apt-get -y install pkg-config libavahi-client-dev
       - uses: actions/checkout@v4
       - name: Configure ...
