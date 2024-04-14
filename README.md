@@ -1,14 +1,16 @@
-Publish mDNS Alias
-==================
+Publish mDNS-SD Aliases
+===================================
 [![][3]][4] [![][5]][6] [![][7]][8]
 
-This is a small C daemon that publishes mDNS CNAMEs using Avahi.
+This is a small C program that publishes mDNS CNAMEs using Avahi.  It
+runs as a UNIX daemon, ensuring the CNAME records are published as long
+as the daemon runs.
 
 Currently the program takes its CNAME aliases on the command line:
 
     mdns-alias foo.local bar.local
 
-At least one name, including `.local` must be given on the command line.
+At least one name, including `.local`, must be given on the command line.
 
 
 Dependencies
