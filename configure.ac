@@ -1,5 +1,6 @@
 AC_PREREQ(2.61)
 AC_INIT([mdns-alias], [1.0], [https://github.com/troglobit/mdns-alias/issues])
+AC_CONFIG_AUX_DIR(.aux)
 AM_INIT_AUTOMAKE(1.11 foreign)
 AM_SILENT_RULES(yes)
 

@@ -1,14 +1,14 @@
 *~
 *.o
-.deps
-.libs
+.aux/
+.deps/
+.libs/
 .dirstamp
 
 mdns-alias
 
 /aclocal.m4
 /autom4te.cache/
-/aux
 /compile
 /config.h
 /config.h.in
