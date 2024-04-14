@@ -3,7 +3,7 @@ AC_INIT([mdns-alias], [1.0], [https://github.com/troglobit/mdns-alias/issues])
 AM_INIT_AUTOMAKE(1.11 foreign)
 AM_SILENT_RULES(yes)
 
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 
 AC_PROG_CC
 AC_PROG_INSTALL
