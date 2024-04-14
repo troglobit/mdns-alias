@@ -1,6 +1,6 @@
 Publish mDNS Alias
 ==================
-[![][3]][4] [![][5]][6]
+[![][3]][4] [![][5]][6] [![][7]][8]
 
 This is a small C daemon that publishes mDNS CNAMEs using Avahi.
 
@@ -65,3 +65,5 @@ none did it better than [George Hawkins][1], I believe.
 [4]: https://en.wikipedia.org/wiki/ISC_license
 [5]: https://github.com/troglobit/mdns-alias/actions/workflows/build.yml/badge.svg
 [6]: https://github.com/troglobit/mdns-alias/actions/workflows/build.yml/
+[7]: https://scan.coverity.com/projects/30083/badge.svg
+[8]: https://scan.coverity.com/projects/30083
