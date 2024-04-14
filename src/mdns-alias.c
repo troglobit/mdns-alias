@@ -85,7 +85,7 @@ static void create_cnames(AvahiClient *client)
 						  cnames[i], AVAHI_DNS_CLASS_IN, AVAHI_DNS_TYPE_CNAME,
 						  AVAHI_DEFAULT_TTL, hostname, len + 1);
 		if (rc >= 0)
-			printf("Published DNS-SD hostname %s with CNAME %s\n", hostname, cnames[i]);
+			printf("Published DNS-SD CNAME %s\n", cnames[i]);
 		else {
 			fprintf(stderr, "Failed publishing DNS-SD CNAME %s: %s\n", cnames[i], avahi_strerror(rc));
 			goto fail;
