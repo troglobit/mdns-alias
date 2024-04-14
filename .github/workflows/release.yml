@@ -36,5 +36,7 @@ jobs:
       - uses: ncipollo/release-action@v1
         with:
           name: mdns-alias ${{ github.ref_name }}
+          prerelease: false
+          makeLatest: true
           bodyFile: "release.md"
           artifacts: "artifacts/*"
