@@ -9,6 +9,10 @@ AC_CONFIG_FILES([Makefile src/Makefile])
 AC_PROG_CC
 AC_PROG_INSTALL
 
+AC_DEFINE([_GNU_SOURCE], [1], [Define to activate GNU extensions.])
+AC_REPLACE_FUNCS([strlcat])
+AC_CONFIG_LIBOBJ_DIR([lib])
+
 # Check for pkg-config first, warn if it's not installed
 PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([avahi], [avahi-client >= 0.8])

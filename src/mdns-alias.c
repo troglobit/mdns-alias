@@ -10,6 +10,10 @@
 #include <avahi-common/malloc.h>
 #include <avahi-common/error.h>
 
+#ifndef HAVE_STRLCAT
+size_t strlcat(char *dst, const char *src, size_t dsize);
+#endif
+
 static AvahiEntryGroup *group = NULL;
 static AvahiSimplePoll *loop = NULL;
 static const char **cnames = NULL;
@@ -61,8 +65,7 @@ static void create_cnames(AvahiClient *client)
 	if (gethostname(&hostname[1], sizeof(hostname) - 1) < 0)
 		perror("gethostname");
 
-	strncat(hostname, ".local", sizeof(hostname));
-	hostname[sizeof(hostname) - 1] = '\0';
+	strlcat(hostname, ".local", sizeof(hostname));
 
 	/* Convert the hostname string into DNS's labelled-strings format */
 	len = strlen(hostname);
