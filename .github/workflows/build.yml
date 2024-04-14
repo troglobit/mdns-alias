@@ -1,0 +1,44 @@
+name: Bob the Builder
+
+# Run on all branches, including all pull requests, except the 'dev'
+# branch since that's where we run Coverity Scan (limited tokens/day)
+on:
+  push:
+    branches:
+      - '**'
+      - '!dev'
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  build:
+    name: ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+      fail-fast: false
+    env:
+      MAKEFLAGS: -j3
+      CC: ${{ matrix.compiler }}
+    steps:
+      - name: Install deps ...
+        run: |
+          sudo apt-get -y install pkg-config libavahi-client-dev
+      - uses: actions/checkout@v4
+      - name: Configure ...
+        run: |
+          ./autogen.sh
+          ./configure --prefix=
+      - name: Build ...
+        run: |
+          make
+      - name: Install to ~/tmp and inspect ...
+        run: |
+          DESTDIR=~/tmp make install-strip
+          tree ~/tmp
+          ldd ~/tmp/sbin/mdns-alias
+          size ~/tmp/sbin/mdns-alias
+          ~/tmp/sbin/mdns-alias -h
+          ~/tmp/sbin/mdns-alias -v
