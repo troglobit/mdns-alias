@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: ISC */
 
 #include <getopt.h>
+#include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -126,6 +127,12 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 	}
 }
 
+static void signal_callback(int signo)
+{
+	printf("Got signal %d, exiting.\n", signo);
+	avahi_simple_poll_quit(loop);
+}
+
 static int usage(int rc)
 {
 	printf("Usage:\n"
@@ -189,6 +196,9 @@ int main(int argc, char **argv)
 		avahi_simple_poll_free(loop);
 		return 1;
 	}
+
+	signal(SIGTERM, signal_callback);
+	signal(SIGHUP, signal_callback);
 
 	avahi_simple_poll_loop(loop);
 	avahi_client_free(client);
