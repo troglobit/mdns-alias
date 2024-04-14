@@ -20,7 +20,7 @@ release-hook:
 	fi
 
 ## Target to run when building a release
-release: release-hook
+release: distcheck release-hook
 	@for file in $(DIST_ARCHIVES); do		\
 		sha256sum $$file > ../$$file.sha256;	\
 	done
