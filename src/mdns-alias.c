@@ -18,6 +18,8 @@ size_t strlcat(char *dst, const char *src, size_t dsize);
 static AvahiEntryGroup *group = NULL;
 static AvahiSimplePoll *loop = NULL;
 static const char **cnames = NULL;
+static const char *domain  = ".local";
+static const size_t minlen = 6;
 
 
 static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *_)
@@ -158,6 +160,20 @@ int main(int argc, char **argv)
 
 	if (optind >= argc)
 		return usage(1);
+
+	for (c = optind; c < argc; c++) {
+		const char *cname = argv[c];
+		size_t len = strlen(cname);
+
+		if (len < minlen)
+			goto invalid;
+
+		len -= minlen;
+		if (strcmp(&cname[len], domain)) {
+		invalid:
+			fprintf(stderr, "Invalid CNAME: %s, must end with %s\n", cname, domain);
+		}
+	}
 
 	cnames = (const char **)&argv[optind];
 
