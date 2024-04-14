@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: ISC */
 
+#include <getopt.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -123,17 +124,42 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 	}
 }
 
+static int usage(int rc)
+{
+	printf("Usage:\n"
+	       "             %s [-hv] [alias.local [..]]\n"
+	       "Options:\n"
+	       "  -h         This help text\n"
+	       "  -v         Show program version\n"
+	       "\n"
+	       "Publishes mDNS CNAMEs (aliases) for this host using Avahi.\n"
+	       "\n", PACKAGE_NAME);
+
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	AvahiClient *client;
-	int error;
+	int c, error;
 
-	if (argc < 2) {
-		printf("Usage: mdns-alias foo.local bar.local [...]\n");
-		return 1;
+	while ((c = getopt(argc, argv, "hv")) != EOF) {
+		switch (c) {
+		case 'h':
+			return usage(0);
+		case 'v':
+			puts(PACKAGE_NAME " v" VERSION);
+			puts(PACKAGE_BUGREPORT);
+			return 0;
+		default:
+			return usage(1);
+		}
 	}
 
-	cnames = (const char **)&argv[1];
+	if (optind >= argc)
+		return usage(1);
+
+	cnames = (const char **)&argv[optind];
 
 	loop = avahi_simple_poll_new();
 	if (!loop) {
