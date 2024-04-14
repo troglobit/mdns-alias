@@ -199,8 +199,11 @@ int main(int argc, char **argv)
 
 	signal(SIGTERM, signal_callback);
 	signal(SIGHUP, signal_callback);
+	signal(SIGINT, signal_callback);
 
 	avahi_simple_poll_loop(loop);
+	if (group)
+		avahi_entry_group_free(group);
 	avahi_client_free(client);
 	avahi_simple_poll_free(loop);
 
