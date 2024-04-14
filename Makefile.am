@@ -1,5 +1,5 @@
 SUBDIRS             = src
-dist_doc_DATA       = README.md LICENSE
+dist_doc_DATA       = ChangeLog.md README.md LICENSE
 
 ## Check if tagged in git
 release-hook:
