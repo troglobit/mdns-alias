@@ -184,6 +184,7 @@ int main(int argc, char **argv)
 		if (strcmp(&cname[len], domain)) {
 		invalid:
 			fprintf(stderr, "Invalid CNAME: %s, must end with %s\n", cname, domain);
+			return 1;
 		}
 	}
 
