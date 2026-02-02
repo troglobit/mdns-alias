@@ -31,6 +31,11 @@ static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 	group = g;
 
 	switch (state) {
+	case AVAHI_ENTRY_GROUP_COLLISION:
+		fprintf(stderr, "CNAME collision, already published by another host on the network.\n");
+		avahi_simple_poll_quit(loop);
+		break;
+
 	case AVAHI_ENTRY_GROUP_FAILURE:
 		client = avahi_entry_group_get_client(g);
 		fprintf(stderr, "Entry group failure: %s\n", avahi_strerror(avahi_client_errno(client)));
@@ -44,7 +49,7 @@ static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 
 static void create_cnames(AvahiClient *client)
 {
-	AvahiPublishFlags flags = (AVAHI_PUBLISH_USE_MULTICAST | AVAHI_PUBLISH_ALLOW_MULTIPLE);
+	AvahiPublishFlags flags = AVAHI_PUBLISH_USE_MULTICAST;
 	char hostname[HOST_NAME_MAX + 64] = ".";
 	int i, rc, count;
 	size_t len;
