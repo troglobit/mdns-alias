@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: ISC */
 
+#include <errno.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <string.h>
+#include <syslog.h>
+#include <unistd.h>
 #include <avahi-client/client.h>
 #include <avahi-client/publish.h>
 #include <avahi-common/alternative.h>
@@ -15,6 +17,12 @@
 #ifndef HAVE_STRLCAT
 size_t strlcat(char *dst, const char *src, size_t dsize);
 #endif
+
+#define ERR(fmt, ...)    syslog(LOG_ERR,     fmt, ##__VA_ARGS__)
+#define WARN(fmt, ...)   syslog(LOG_WARNING, fmt, ##__VA_ARGS__)
+#define NOTICE(fmt, ...) syslog(LOG_NOTICE,  fmt, ##__VA_ARGS__)
+#define DEBUG(fmt, ...)  syslog(LOG_DEBUG,   fmt, ##__VA_ARGS__)
+#define ERRNO(fmt, ...)  ERR(fmt ": %s", ##__VA_ARGS__, strerror(errno))
 
 static AvahiEntryGroup *group = NULL;
 static AvahiSimplePoll *loop = NULL;
@@ -32,13 +40,13 @@ static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 
 	switch (state) {
 	case AVAHI_ENTRY_GROUP_COLLISION:
-		fprintf(stderr, "CNAME collision, already published by another host on the network.\n");
+		ERR("CNAME collision, already published by another host on the network.");
 		avahi_simple_poll_quit(loop);
 		break;
 
 	case AVAHI_ENTRY_GROUP_FAILURE:
 		client = avahi_entry_group_get_client(g);
-		fprintf(stderr, "Entry group failure: %s\n", avahi_strerror(avahi_client_errno(client)));
+		ERR("Entry group failure: %s", avahi_strerror(avahi_client_errno(client)));
 		avahi_simple_poll_quit(loop);
 		break;
 
@@ -59,8 +67,8 @@ static void create_cnames(AvahiClient *client)
 	if (!group) {
 		group = avahi_entry_group_new(client, entry_group_callback, NULL);
 		if (!group) {
-			fprintf(stderr, "Failed creating new entry group: %s\n",
-				avahi_strerror(avahi_client_errno(client)));
+			ERR("Failed creating new entry group: %s",
+			    avahi_strerror(avahi_client_errno(client)));
 			goto fail;
 		}
 	}
@@ -74,7 +82,7 @@ static void create_cnames(AvahiClient *client)
 
 	avahi_host = avahi_client_get_host_name(client);
 	if (!avahi_host) {
-		fprintf(stderr, "Failed to get hostname: %s\n", avahi_strerror(avahi_client_errno(client)));
+		ERR("Failed to get hostname: %s", avahi_strerror(avahi_client_errno(client)));
 		goto fail;
 	}
 	snprintf(&hostname[1], sizeof(hostname) - 1, "%s", avahi_host);
@@ -95,16 +103,16 @@ static void create_cnames(AvahiClient *client)
 						  cnames[i], AVAHI_DNS_CLASS_IN, AVAHI_DNS_TYPE_CNAME,
 						  AVAHI_DEFAULT_TTL, hostname, len + 1);
 		if (rc >= 0)
-			printf("Published DNS-SD CNAME %s\n", cnames[i]);
+			NOTICE("Published CNAME %s", cnames[i]);
 		else {
-			fprintf(stderr, "Failed publishing DNS-SD CNAME %s: %s\n", cnames[i], avahi_strerror(rc));
+			ERR("Failed publishing CNAME %s: %s", cnames[i], avahi_strerror(rc));
 			goto fail;
 		}
 	}
 
 	rc = avahi_entry_group_commit(group);
 	if (rc < 0) {
-		fprintf(stderr, "Failed to commit entry group: %s\n", avahi_strerror(rc));
+		ERR("Failed to commit entry group: %s", avahi_strerror(rc));
 		goto fail;
 	}
 
@@ -121,7 +129,7 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 		break;
 
 	case AVAHI_CLIENT_FAILURE:
-		fprintf(stderr, "Client failure: %s\n", avahi_strerror(avahi_client_errno(c)));
+		ERR("Client failure: %s", avahi_strerror(avahi_client_errno(c)));
 		avahi_simple_poll_quit(loop);
 		break;
 
@@ -138,16 +146,27 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 
 static void signal_callback(int signo)
 {
-	printf("Got signal %d, exiting.\n", signo);
+	(void)signo;
 	avahi_simple_poll_quit(loop);
+}
+
+static int loglevel(const char *arg)
+{
+	if (!strcmp(arg, "error"))   return LOG_ERR;
+	if (!strcmp(arg, "warning")) return LOG_WARNING;
+	if (!strcmp(arg, "notice"))  return LOG_NOTICE;
+	if (!strcmp(arg, "info"))    return LOG_INFO;
+	if (!strcmp(arg, "debug"))   return LOG_DEBUG;
+	return -1;
 }
 
 static int usage(int rc)
 {
 	printf("Usage:\n"
-	       "             %s [-hv] [alias.local [..]]\n"
+	       "             %s [-hv] [-l LEVEL] [alias.local [..]]\n"
 	       "Options:\n"
 	       "  -h         This help text\n"
+	       "  -l LEVEL   Set log level: error, warning, notice (default), info, debug\n"
 	       "  -v         Show program version\n"
 	       "\n"
 	       "Publishes mDNS CNAMEs (aliases) for this host using Avahi.\n"
@@ -159,12 +178,19 @@ static int usage(int rc)
 int main(int argc, char **argv)
 {
 	AvahiClient *client;
-	int c, error;
+	int c, error, level = LOG_NOTICE;
 
-	while ((c = getopt(argc, argv, "hv")) != EOF) {
+	while ((c = getopt(argc, argv, "hl:v")) != EOF) {
 		switch (c) {
 		case 'h':
 			return usage(0);
+		case 'l':
+			level = loglevel(optarg);
+			if (level < 0) {
+				fprintf(stderr, "Invalid log level '%s'\n", optarg);
+				return usage(1);
+			}
+			break;
 		case 'v':
 			puts(PACKAGE_NAME " v" VERSION);
 			puts(PACKAGE_BUGREPORT);
@@ -177,6 +203,9 @@ int main(int argc, char **argv)
 	if (optind >= argc)
 		return usage(1);
 
+	openlog(PACKAGE_NAME, LOG_PID, LOG_DAEMON);
+	setlogmask(LOG_UPTO(level));
+
 	for (c = optind; c < argc; c++) {
 		const char *cname = argv[c];
 		size_t len = strlen(cname);
@@ -187,7 +216,7 @@ int main(int argc, char **argv)
 		len -= minlen;
 		if (strcmp(&cname[len], domain)) {
 		invalid:
-			fprintf(stderr, "Invalid CNAME: %s, must end with %s\n", cname, domain);
+			ERR("Invalid CNAME: %s, must end with %s", cname, domain);
 			return 1;
 		}
 	}
@@ -196,14 +225,16 @@ int main(int argc, char **argv)
 
 	loop = avahi_simple_poll_new();
 	if (!loop) {
-		fprintf(stderr, "Failed creating Avahi loop.\n");
+		ERR("Failed creating Avahi loop.");
+		closelog();
 		return 1;
 	}
 
 	client = avahi_client_new(avahi_simple_poll_get(loop), 0, client_callback, NULL, &error);
 	if (!client) {
-		fprintf(stderr, "Failed to create Avahi client: %s\n", avahi_strerror(error));
+		ERR("Failed to create Avahi client: %s", avahi_strerror(error));
 		avahi_simple_poll_free(loop);
+		closelog();
 		return 1;
 	}
 
@@ -216,6 +247,7 @@ int main(int argc, char **argv)
 		avahi_entry_group_free(group);
 	avahi_client_free(client);
 	avahi_simple_poll_free(loop);
+	closelog();
 
 	return 0;
 }
