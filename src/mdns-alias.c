@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
@@ -25,11 +26,14 @@ size_t strlcat(char *dst, const char *src, size_t dsize);
 #define DEBUG(fmt, ...)  syslog(LOG_DEBUG,   fmt, ##__VA_ARGS__)
 #define ERRNO(fmt, ...)  ERR(fmt ": %s", ##__VA_ARGS__, strerror(errno))
 
-static AvahiEntryGroup *group = NULL;
-static AvahiSimplePoll *loop = NULL;
-static const char **cnames = NULL;
-static const char *domain  = ".local";
-static const size_t minlen = 6;
+static AvahiEntryGroup *group       = NULL;
+static AvahiSimplePoll *loop        = NULL;
+static const char     **cnames      = NULL;
+static const char      *domain      = ".local";
+static const size_t     minlen      = 6;
+static char             auto_cname[HOST_NAME_MAX + 8];
+static int              use_hostname = 0;
+static int              sigpipe[2]  = { -1, -1 };
 
 
 static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *_)
@@ -145,10 +149,51 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 	}
 }
 
+static void pipe_callback(AvahiWatch *w, int fd, AvahiWatchEvent events, void *userdata)
+{
+	AvahiClient *client = userdata;
+	char new_cname[HOST_NAME_MAX + 8];
+	char syshost[HOST_NAME_MAX + 1];
+	char sig;
+
+	(void)w;
+	(void)events;
+
+	if (read(fd, &sig, 1) <= 0)
+		return;
+
+	if ((int)(unsigned char)sig != SIGHUP) {
+		avahi_simple_poll_quit(loop);
+		return;
+	}
+
+	if (!use_hostname) {
+		DEBUG("SIGHUP received, nothing to reload.");
+		return;
+	}
+
+	if (gethostname(syshost, sizeof(syshost)) < 0) {
+		ERRNO("Failed to get system hostname");
+		return;
+	}
+	snprintf(new_cname, sizeof(new_cname), "%s.local", syshost);
+	if (!strcmp(new_cname, auto_cname)) {
+		DEBUG("SIGHUP received, hostname unchanged (%s).", syshost);
+		return;
+	}
+
+	NOTICE("Hostname changed to %s, republishing CNAMEs.", syshost);
+	snprintf(auto_cname, sizeof(auto_cname), "%s", new_cname);
+	if (group)
+		avahi_entry_group_reset(group);
+	create_cnames(client);
+}
+
 static void signal_callback(int signo)
 {
-	(void)signo;
-	avahi_simple_poll_quit(loop);
+	char sig = (char)signo;
+	ssize_t n = write(sigpipe[1], &sig, 1);
+	(void)n;
 }
 
 static int loglevel(const char *arg)
@@ -164,13 +209,15 @@ static int loglevel(const char *arg)
 static int usage(int rc)
 {
 	printf("Usage:\n"
-	       "             %s [-hv] [-l LEVEL] [alias.local [..]]\n"
+	       "             %s [-hHv] [-l LEVEL] [alias.local [..]]\n"
 	       "Options:\n"
 	       "  -h         This help text\n"
+	       "  -H         Add system hostname (from /etc/hostname) as a CNAME\n"
 	       "  -l LEVEL   Set log level: error, warning, notice (default), info, debug\n"
 	       "  -v         Show program version\n"
 	       "\n"
 	       "Publishes mDNS CNAMEs (aliases) for this host using Avahi.\n"
+	       "Send SIGHUP to reload the system hostname (-H) without restarting.\n"
 	       "\n", PACKAGE_NAME);
 
 	return rc;
@@ -178,13 +225,19 @@ static int usage(int rc)
 
 int main(int argc, char **argv)
 {
+	static const char *cnames_buf[64];
+	const AvahiPoll *poll_api;
+	AvahiWatch *sig_watch;
 	AvahiClient *client;
 	int c, error, level = LOG_NOTICE;
 
-	while ((c = getopt(argc, argv, "hl:v")) != EOF) {
+	while ((c = getopt(argc, argv, "hHl:v")) != EOF) {
 		switch (c) {
 		case 'h':
 			return usage(0);
+		case 'H':
+			use_hostname = 1;
+			break;
 		case 'l':
 			level = loglevel(optarg);
 			if (level < 0) {
@@ -201,11 +254,23 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (optind >= argc)
+	if (!use_hostname && optind >= argc)
 		return usage(1);
 
 	openlog(PACKAGE_NAME, LOG_PID, LOG_DAEMON);
 	setlogmask(LOG_UPTO(level));
+
+	if (use_hostname) {
+		char syshost[HOST_NAME_MAX + 1];
+
+		if (gethostname(syshost, sizeof(syshost)) < 0) {
+			ERRNO("Failed to get system hostname");
+			closelog();
+			return 1;
+		}
+		snprintf(auto_cname, sizeof(auto_cname), "%s.local", syshost);
+		cnames_buf[0] = auto_cname;
+	}
 
 	for (c = optind; c < argc; c++) {
 		const char *cname = argv[c];
@@ -220,9 +285,10 @@ int main(int argc, char **argv)
 			ERR("Invalid CNAME: %s, must end with %s", cname, domain);
 			return 1;
 		}
+		cnames_buf[use_hostname + (c - optind)] = cname;
 	}
-
-	cnames = (const char **)&argv[optind];
+	cnames_buf[use_hostname + (argc - optind)] = NULL;
+	cnames = cnames_buf;
 
 	loop = avahi_simple_poll_new();
 	if (!loop) {
@@ -231,19 +297,36 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	if (pipe(sigpipe) < 0) {
+		ERRNO("Failed to create signal pipe");
+		avahi_simple_poll_free(loop);
+		closelog();
+		return 1;
+	}
+	fcntl(sigpipe[1], F_SETFL, O_NONBLOCK);
+
 	client = avahi_client_new(avahi_simple_poll_get(loop), 0, client_callback, NULL, &error);
 	if (!client) {
 		ERR("Failed to create Avahi client: %s", avahi_strerror(error));
+		close(sigpipe[0]);
+		close(sigpipe[1]);
 		avahi_simple_poll_free(loop);
 		closelog();
 		return 1;
 	}
 
+	poll_api  = avahi_simple_poll_get(loop);
+	sig_watch = poll_api->watch_new(poll_api, sigpipe[0], AVAHI_WATCH_IN, pipe_callback, client);
+
 	signal(SIGTERM, signal_callback);
-	signal(SIGHUP, signal_callback);
-	signal(SIGINT, signal_callback);
+	signal(SIGHUP,  signal_callback);
+	signal(SIGINT,  signal_callback);
 
 	avahi_simple_poll_loop(loop);
+
+	poll_api->watch_free(sig_watch);
+	close(sigpipe[0]);
+	close(sigpipe[1]);
 	if (group)
 		avahi_entry_group_free(group);
 	avahi_client_free(client);
