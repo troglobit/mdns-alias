@@ -51,6 +51,7 @@ static void create_cnames(AvahiClient *client)
 {
 	AvahiPublishFlags flags = AVAHI_PUBLISH_USE_MULTICAST;
 	char hostname[HOST_NAME_MAX + 64] = ".";
+	const char *avahi_host;
 	int i, rc, count;
 	size_t len;
 
@@ -71,9 +72,12 @@ static void create_cnames(AvahiClient *client)
 	if (!avahi_entry_group_is_empty(group))
 		return;
 
-	if (gethostname(&hostname[1], sizeof(hostname) - 1) < 0)
-		perror("gethostname");
-
+	avahi_host = avahi_client_get_host_name(client);
+	if (!avahi_host) {
+		fprintf(stderr, "Failed to get hostname: %s\n", avahi_strerror(avahi_client_errno(client)));
+		goto fail;
+	}
+	snprintf(&hostname[1], sizeof(hostname) - 1, "%s", avahi_host);
 	strlcat(hostname, ".local", sizeof(hostname));
 
 	/* Convert the hostname string into DNS's labelled-strings format */
