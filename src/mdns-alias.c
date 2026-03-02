@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: ISC */
 
+#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
@@ -7,11 +8,11 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <sys/param.h>
+
 #include <avahi-client/client.h>
 #include <avahi-client/publish.h>
-#include <avahi-common/alternative.h>
 #include <avahi-common/simple-watch.h>
-#include <avahi-common/malloc.h>
 #include <avahi-common/error.h>
 
 #ifndef HAVE_STRLCAT
