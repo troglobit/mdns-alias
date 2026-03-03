@@ -11,20 +11,25 @@ Currently the program takes its CNAME aliases on the command line:
     mdns-alias foo.local bar.local
 
 At least one name, including `.local`, must be given on the command line.
+The `-H` flag additionally publishes the system hostname (from
+`/etc/hostname`) as a CNAME, without having to spell it out explicitly:
 
+    mdns-alias -H network.local
+
+Send `SIGHUP` to the daemon to reload the system hostname and republish
+without restarting.
 
 Dependencies
 ------------
 
 At run time: a running `avahi-daemon`
 
-Build time: avahi client library and header files, and to detect it, the
-`pkg-config` tool.  You also need a C compiler and `make`.
+Build time: avahi client library, [libuev][9] event loop library, and
+`pkg-config` to detect them.  You also need a C compiler and `make`.
 
 Ubuntu, Mint, or other Debian based Linux distributions:
 
-    sudo apt install libavahi-client-dev pkg-config
-
+    sudo apt install libavahi-client-dev libuev-dev pkg-config
 
 Building
 --------
@@ -46,12 +51,12 @@ type:
 Some systems no longer have `sudo`, alternatives include `su` to root,
 or tools like `doas`.
 
-> **Note:** if you do not like pre-packaged, and properly versioned,
-> release tarballs, you need to have GNU autoconf and automake installed
-> to be able run the `autogen.sh` script.  It creates the `configure`
-> script and Makefile template, which are included in the portable
-> release tarballs.
-
+> [!NOTE]
+> If you do not like pre-packaged, and properly versioned, release
+> tarballs, you need to have GNU autoconf and automake installed to be
+> able run the `autogen.sh` script.  It creates the `configure` script
+> and Makefile template, which are included in the portable release
+> tarballs.
 
 Motivation
 ----------
@@ -69,3 +74,4 @@ none did it better than [George Hawkins][1], I believe.
 [6]: https://github.com/troglobit/mdns-alias/actions/workflows/build.yml/
 [7]: https://scan.coverity.com/projects/30083/badge.svg
 [8]: https://scan.coverity.com/projects/30083
+[9]: https://github.com/troglobit/libuev
