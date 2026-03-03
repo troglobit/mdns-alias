@@ -16,6 +16,7 @@ AC_CONFIG_LIBOBJ_DIR([lib])
 # Check for pkg-config first, warn if it's not installed
 PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([avahi], [avahi-client >= 0.8])
+PKG_CHECK_MODULES([uev],  [libuev  >= 2.4.0])
 
 AC_OUTPUT
 

@@ -2,18 +2,20 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
 #include <sys/param.h>
+#include <sys/time.h>
 
+#include <uev/uev.h>
 #include <avahi-client/client.h>
 #include <avahi-client/publish.h>
-#include <avahi-common/simple-watch.h>
+#include <avahi-common/watch.h>
 #include <avahi-common/error.h>
 
 #ifndef HAVE_STRLCAT
@@ -26,14 +28,154 @@ size_t strlcat(char *dst, const char *src, size_t dsize);
 #define DEBUG(fmt, ...)  syslog(LOG_DEBUG,   fmt, ##__VA_ARGS__)
 #define ERRNO(fmt, ...)  ERR(fmt ": %s", ##__VA_ARGS__, strerror(errno))
 
-static AvahiEntryGroup *group       = NULL;
-static AvahiSimplePoll *loop        = NULL;
-static const char     **cnames      = NULL;
-static const char      *domain      = ".local";
-static const size_t     minlen      = 6;
+/*
+ * Avahi uses an abstract AvahiPoll vtable to interface with whatever
+ * event loop the application provides.  These two structs are the
+ * opaque handles Avahi allocates through our watch_new/timeout_new
+ * callbacks; we back them with libuev I/O and timer watchers.
+ */
+struct AvahiWatch {
+	uev_t              io;
+	AvahiWatchCallback cb;
+	void              *userdata;
+	AvahiWatchEvent    revents;
+};
+
+struct AvahiTimeout {
+	uev_t                timer;
+	AvahiTimeoutCallback cb;
+	void                *userdata;
+};
+
+static uev_ctx_t        ctx;
+static AvahiEntryGroup *group        = NULL;
+static const char     **cnames       = NULL;
+static const char      *domain       = ".local";
+static const size_t     minlen       = 6;
 static char             auto_cname[HOST_NAME_MAX + 8];
 static int              use_hostname = 0;
-static int              sigpipe[2]  = { -1, -1 };
+
+
+/*
+ * Avahi <-> libuev bridge
+ *
+ * AVAHI_WATCH_IN/OUT/ERR/HUP map to POLLIN/POLLOUT/POLLERR/POLLHUP,
+ * which are numerically identical to EPOLLIN/EPOLLOUT/EPOLLERR/EPOLLHUP
+ * on Linux, so direct casts between AvahiWatchEvent and libuev events
+ * are safe.
+ */
+static void avahi_watch_cb(uev_t *w, void *arg, int events)
+{
+	AvahiWatch *aw = arg;
+
+	aw->revents = (AvahiWatchEvent)events;
+	aw->cb(aw, w->fd, aw->revents, aw->userdata);
+}
+
+static AvahiWatch *avahi_watch_new(const AvahiPoll *api, int fd, AvahiWatchEvent event,
+				   AvahiWatchCallback callback, void *userdata)
+{
+	AvahiWatch *w;
+
+	(void)api;
+	w = malloc(sizeof(*w));
+	if (!w)
+		return NULL;
+
+	w->cb       = callback;
+	w->userdata = userdata;
+	w->revents  = 0;
+
+	if (uev_io_init(&ctx, &w->io, avahi_watch_cb, w, fd, (int)event) < 0) {
+		free(w);
+		return NULL;
+	}
+
+	return w;
+}
+
+static void avahi_watch_update(AvahiWatch *w, AvahiWatchEvent event)
+{
+	uev_io_set(&w->io, w->io.fd, (int)event);
+}
+
+static AvahiWatchEvent avahi_watch_get_events(AvahiWatch *w)
+{
+	return w->revents;
+}
+
+static void avahi_watch_free(AvahiWatch *w)
+{
+	uev_io_stop(&w->io);
+	free(w);
+}
+
+/* Convert an absolute struct timeval to a relative millisecond value for libuev. */
+static int timeval_to_ms(const struct timeval *tv)
+{
+	struct timeval now, diff;
+
+	gettimeofday(&now, NULL);
+	if (!timercmp(tv, &now, >))
+		return 1; /* already expired, fire ASAP */
+	timersub(tv, &now, &diff);
+
+	return (int)(diff.tv_sec * 1000 + diff.tv_usec / 1000);
+}
+
+static void avahi_timeout_cb(uev_t *w, void *arg, int events)
+{
+	AvahiTimeout *t = arg;
+
+	(void)w;
+	(void)events;
+	t->cb(t, t->userdata);
+}
+
+static AvahiTimeout *avahi_timeout_new(const AvahiPoll *api, const struct timeval *tv,
+				       AvahiTimeoutCallback callback, void *userdata)
+{
+	AvahiTimeout *t;
+
+	(void)api;
+	t = malloc(sizeof(*t));
+	if (!t)
+		return NULL;
+
+	t->cb       = callback;
+	t->userdata = userdata;
+
+	/* tv == NULL means create disarmed; timeout=0 disarms in libuev. */
+	if (uev_timer_init(&ctx, &t->timer, avahi_timeout_cb, t,
+			   tv ? timeval_to_ms(tv) : 0, 0) < 0) {
+		free(t);
+		return NULL;
+	}
+
+	return t;
+}
+
+static void avahi_timeout_update(AvahiTimeout *t, const struct timeval *tv)
+{
+	uev_timer_set(&t->timer, tv ? timeval_to_ms(tv) : 0, 0);
+}
+
+static void avahi_timeout_free(AvahiTimeout *t)
+{
+	uev_timer_stop(&t->timer);
+	free(t);
+}
+
+static const AvahiPoll avahi_uev_poll = {
+	.userdata         = NULL,
+	.watch_new        = avahi_watch_new,
+	.watch_update     = avahi_watch_update,
+	.watch_get_events = avahi_watch_get_events,
+	.watch_free       = avahi_watch_free,
+	.timeout_new      = avahi_timeout_new,
+	.timeout_update   = avahi_timeout_update,
+	.timeout_free     = avahi_timeout_free,
+};
 
 
 static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *_)
@@ -46,13 +188,13 @@ static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 	switch (state) {
 	case AVAHI_ENTRY_GROUP_COLLISION:
 		ERR("CNAME collision, already published by another host on the network.");
-		avahi_simple_poll_quit(loop);
+		uev_exit(&ctx);
 		break;
 
 	case AVAHI_ENTRY_GROUP_FAILURE:
 		client = avahi_entry_group_get_client(g);
 		ERR("Entry group failure: %s", avahi_strerror(avahi_client_errno(client)));
-		avahi_simple_poll_quit(loop);
+		uev_exit(&ctx);
 		break;
 
 	default:
@@ -123,7 +265,7 @@ static void create_cnames(AvahiClient *client)
 
 	return;
  fail:
-	avahi_simple_poll_quit(loop);
+	uev_exit(&ctx);
 }
 
 static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
@@ -135,7 +277,7 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 
 	case AVAHI_CLIENT_FAILURE:
 		ERR("Client failure: %s", avahi_strerror(avahi_client_errno(c)));
-		avahi_simple_poll_quit(loop);
+		uev_exit(&ctx);
 		break;
 
 	case AVAHI_CLIENT_S_COLLISION:
@@ -149,23 +291,14 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 	}
 }
 
-static void pipe_callback(AvahiWatch *w, int fd, AvahiWatchEvent events, void *userdata)
+static void sighup_cb(uev_t *w, void *arg, int events)
 {
-	AvahiClient *client = userdata;
+	AvahiClient *client = arg;
 	char new_cname[HOST_NAME_MAX + 8];
 	char syshost[HOST_NAME_MAX + 1];
-	char sig;
 
 	(void)w;
 	(void)events;
-
-	if (read(fd, &sig, 1) <= 0)
-		return;
-
-	if ((int)(unsigned char)sig != SIGHUP) {
-		avahi_simple_poll_quit(loop);
-		return;
-	}
 
 	if (!use_hostname) {
 		DEBUG("SIGHUP received, nothing to reload.");
@@ -189,11 +322,11 @@ static void pipe_callback(AvahiWatch *w, int fd, AvahiWatchEvent events, void *u
 	create_cnames(client);
 }
 
-static void signal_callback(int signo)
+static void sigterm_cb(uev_t *w, void *arg, int events)
 {
-	char sig = (char)signo;
-	ssize_t n = write(sigpipe[1], &sig, 1);
-	(void)n;
+	(void)arg;
+	(void)events;
+	uev_exit(w->ctx);
 }
 
 static int loglevel(const char *arg)
@@ -226,8 +359,7 @@ static int usage(int rc)
 int main(int argc, char **argv)
 {
 	static const char *cnames_buf[64];
-	const AvahiPoll *poll_api;
-	AvahiWatch *sig_watch;
+	uev_t sigterm_w, sigint_w, sighup_w;
 	AvahiClient *client;
 	int c, error, level = LOG_NOTICE;
 
@@ -290,47 +422,24 @@ int main(int argc, char **argv)
 	cnames_buf[use_hostname + (argc - optind)] = NULL;
 	cnames = cnames_buf;
 
-	loop = avahi_simple_poll_new();
-	if (!loop) {
-		ERR("Failed creating Avahi loop.");
-		closelog();
-		return 1;
-	}
+	uev_init(&ctx);
 
-	if (pipe(sigpipe) < 0) {
-		ERRNO("Failed to create signal pipe");
-		avahi_simple_poll_free(loop);
-		closelog();
-		return 1;
-	}
-	fcntl(sigpipe[1], F_SETFL, O_NONBLOCK);
-
-	client = avahi_client_new(avahi_simple_poll_get(loop), 0, client_callback, NULL, &error);
+	client = avahi_client_new(&avahi_uev_poll, 0, client_callback, NULL, &error);
 	if (!client) {
 		ERR("Failed to create Avahi client: %s", avahi_strerror(error));
-		close(sigpipe[0]);
-		close(sigpipe[1]);
-		avahi_simple_poll_free(loop);
 		closelog();
 		return 1;
 	}
 
-	poll_api  = avahi_simple_poll_get(loop);
-	sig_watch = poll_api->watch_new(poll_api, sigpipe[0], AVAHI_WATCH_IN, pipe_callback, client);
+	uev_signal_init(&ctx, &sigterm_w, sigterm_cb, NULL,   SIGTERM);
+	uev_signal_init(&ctx, &sigint_w,  sigterm_cb, NULL,   SIGINT);
+	uev_signal_init(&ctx, &sighup_w,  sighup_cb,  client, SIGHUP);
 
-	signal(SIGTERM, signal_callback);
-	signal(SIGHUP,  signal_callback);
-	signal(SIGINT,  signal_callback);
+	uev_run(&ctx, 0);
 
-	avahi_simple_poll_loop(loop);
-
-	poll_api->watch_free(sig_watch);
-	close(sigpipe[0]);
-	close(sigpipe[1]);
 	if (group)
 		avahi_entry_group_free(group);
 	avahi_client_free(client);
-	avahi_simple_poll_free(loop);
 	closelog();
 
 	return 0;
