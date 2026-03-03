@@ -17,7 +17,7 @@ jobs:
       - name: Installing dependencies ...
         run: |
           sudo apt-get -y update
-          sudo apt-get -y install pkg-config libavahi-client-dev
+          sudo apt-get -y install pkg-config libavahi-client-dev libuev-dev
       - name: Creating Makefiles ...
         run: |
           ./autogen.sh
