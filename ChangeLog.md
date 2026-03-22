@@ -3,6 +3,22 @@ ChangeLog
 
 All notable changes to the project are documented in this file.
 
+[v1.2][] - 2026-03-22
+---------------------
+
+### Changes
+
+- Switch event loop from `AvahiSimplePoll` to [libuev][], implementing
+  the `AvahiPoll` vtable directly.  This removes the libavahi-common
+  poll helper dependency and integrates cleanly with libuev signals and
+  timers
+- Add `SIGHUP` support: when running with `-H`, send `SIGHUP` to reload
+  the system hostname and republish CNAMEs without restarting the daemon
+- Handle Avahi daemon startup race and runtime restarts gracefully using
+  `AVAHI_CLIENT_NO_FAIL`: the daemon now waits for avahi-daemon to
+  appear on the bus rather than failing immediately, and automatically
+  reconnects if avahi-daemon is restarted
+
 [v1.1][] - 2026-03-03
 ---------------------
 
@@ -32,6 +48,8 @@ Initial public release.  Basic support for publishing cname0.local
 .. cnameN.local using the Avahi client API.  Restricted to .local
 for now.
 
+[v1.2]:       https://github.com/troglobit/mdns-alias/compare/v1.1...v1.2
 [v1.1]:       https://github.com/troglobit/mdns-alias/compare/v1.0...v1.1
-[UNRELEASED]: https://github.com/troglobit/mdns-alias/compare/v1.1...HEAD
+[UNRELEASED]: https://github.com/troglobit/mdns-alias/compare/v1.2...HEAD
 [v1.0]:       https://github.com/troglobit/mdns-alias/compare/TAIL...v1.0
+[libuev]:     https://github.com/troglobit/libuev
