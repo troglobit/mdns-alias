@@ -48,7 +48,9 @@ struct AvahiTimeout {
 };
 
 static uev_ctx_t        ctx;
+static AvahiClient     *client       = NULL;
 static AvahiEntryGroup *group        = NULL;
+static uev_t            reconnect_w;
 static const char     **cnames       = NULL;
 static const char      *domain       = ".local";
 static const size_t     minlen       = 6;
@@ -180,7 +182,7 @@ static const AvahiPoll avahi_uev_poll = {
 
 static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state, void *_)
 {
-	AvahiClient *client;
+	AvahiClient *c;
 
 	assert(g == group || group == NULL);
 	group = g;
@@ -192,13 +194,37 @@ static void entry_group_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 		break;
 
 	case AVAHI_ENTRY_GROUP_FAILURE:
-		client = avahi_entry_group_get_client(g);
-		ERR("Entry group failure: %s", avahi_strerror(avahi_client_errno(client)));
+		c = avahi_entry_group_get_client(g);
+		ERR("Entry group failure: %s", avahi_strerror(avahi_client_errno(c)));
 		uev_exit(&ctx);
 		break;
 
 	default:
 		break;
+	}
+}
+
+static void client_callback(AvahiClient *c, AvahiClientState state, void *_);
+
+static void reconnect_cb(uev_t *w, void *arg, int events)
+{
+	int error;
+
+	(void)w;
+	(void)arg;
+	(void)events;
+
+	if (client) {
+		avahi_client_free(client);
+		client = NULL;
+	}
+
+	NOTICE("Reconnecting to Avahi daemon ...");
+	client = avahi_client_new(&avahi_uev_poll, AVAHI_CLIENT_NO_FAIL,
+				  client_callback, NULL, &error);
+	if (!client) {
+		ERR("Failed to reconnect to Avahi daemon: %s", avahi_strerror(error));
+		uev_exit(&ctx);
 	}
 }
 
@@ -276,8 +302,13 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 		break;
 
 	case AVAHI_CLIENT_FAILURE:
-		ERR("Client failure: %s", avahi_strerror(avahi_client_errno(c)));
-		uev_exit(&ctx);
+		WARN("Avahi daemon disconnected, will reconnect in 3s.");
+		group = NULL;
+		uev_timer_set(&reconnect_w, 3000, 0);
+		break;
+
+	case AVAHI_CLIENT_CONNECTING:
+		NOTICE("Waiting for Avahi daemon ...");
 		break;
 
 	case AVAHI_CLIENT_S_COLLISION:
@@ -293,12 +324,17 @@ static void client_callback(AvahiClient *c, AvahiClientState state, void *_)
 
 static void sighup_cb(uev_t *w, void *arg, int events)
 {
-	AvahiClient *client = arg;
 	char new_cname[HOST_NAME_MAX + 8];
 	char syshost[HOST_NAME_MAX + 1];
 
 	(void)w;
+	(void)arg;
 	(void)events;
+
+	if (!client) {
+		DEBUG("SIGHUP received, not yet connected to Avahi.");
+		return;
+	}
 
 	if (!use_hostname) {
 		DEBUG("SIGHUP received, nothing to reload.");
@@ -360,7 +396,6 @@ int main(int argc, char **argv)
 {
 	static const char *cnames_buf[64];
 	uev_t sigterm_w, sigint_w, sighup_w;
-	AvahiClient *client;
 	int c, error, level = LOG_NOTICE;
 
 	while ((c = getopt(argc, argv, "hHl:v")) != EOF) {
@@ -423,23 +458,26 @@ int main(int argc, char **argv)
 	cnames = cnames_buf;
 
 	uev_init(&ctx);
+	uev_timer_init(&ctx, &reconnect_w, reconnect_cb, NULL, 0, 0);
 
-	client = avahi_client_new(&avahi_uev_poll, 0, client_callback, NULL, &error);
+	client = avahi_client_new(&avahi_uev_poll, AVAHI_CLIENT_NO_FAIL,
+				  client_callback, NULL, &error);
 	if (!client) {
 		ERR("Failed to create Avahi client: %s", avahi_strerror(error));
 		closelog();
 		return 1;
 	}
 
-	uev_signal_init(&ctx, &sigterm_w, sigterm_cb, NULL,   SIGTERM);
-	uev_signal_init(&ctx, &sigint_w,  sigterm_cb, NULL,   SIGINT);
-	uev_signal_init(&ctx, &sighup_w,  sighup_cb,  client, SIGHUP);
+	uev_signal_init(&ctx, &sigterm_w, sigterm_cb, NULL, SIGTERM);
+	uev_signal_init(&ctx, &sigint_w,  sigterm_cb, NULL, SIGINT);
+	uev_signal_init(&ctx, &sighup_w,  sighup_cb,  NULL, SIGHUP);
 
 	uev_run(&ctx, 0);
 
 	if (group)
 		avahi_entry_group_free(group);
-	avahi_client_free(client);
+	if (client)
+		avahi_client_free(client);
 	closelog();
 
 	return 0;
